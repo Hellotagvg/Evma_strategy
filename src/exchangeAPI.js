@@ -14,13 +14,13 @@ const BYBIT_PRIVATE_WS_TESTNET = 'wss://stream-testnet.bybit.com/v5/private';
 const BYBIT_PRIVATE_HEARTBEAT_MS = 20000;
 
 let backendBaseUrl = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000';
-let backendPassword = 'yellow';
+let backendPassword = '';
 
 const bybitPrivateFeeds = new Map();
 
 export function configureBackendClient(url, password) {
   backendBaseUrl = (url || 'http://localhost:8000').replace(/\/$/, '');
-  backendPassword = password || 'yellow';
+  backendPassword = password || '';
 }
 
 // ---------------------------------------------------------------------------

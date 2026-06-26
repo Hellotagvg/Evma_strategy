@@ -51,7 +51,7 @@ import {
 // No mock data — positions and limits are fetched live from exchanges
 
 const DEFAULT_BACKEND_URL = 'http://localhost:8000';
-const DEFAULT_BACKEND_PASSWORD = 'yellow';
+const DEFAULT_BACKEND_PASSWORD = '';
 const HTTP_TIMEOUT_MS = 8000;
 // Dashboard monitoring cadence (positions/limits/session). Exceptions: WS ping 25s,
 // Bybit private WS heartbeat 20s — exchange keepalives, not position refresh.
