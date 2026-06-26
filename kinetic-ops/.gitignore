@@ -1,0 +1,8 @@
+.env
+config/accounts.json
+config/*.local.json
+data/
+.kinetic_ops_state.json
+__pycache__/
+*.pyc
+.venv/
