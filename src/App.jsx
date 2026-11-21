@@ -1828,6 +1828,25 @@ export default function App() {
                   </button>
                 </div>
 
+                <div role="navigation" aria-label="Settings sections" style={{ display: 'flex', gap: '8px', padding: '10px 0', borderBottom: '1px solid var(--border-color)' }}>
+                  <button
+                    type="button"
+                    className="btn"
+                    style={{ padding: '7px 10px', fontSize: '11px' }}
+                    onClick={() => document.getElementById('account-config-editor')?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
+                  >
+                    Account configuration
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-cyan"
+                    style={{ padding: '7px 10px', fontSize: '11px' }}
+                    onClick={() => document.getElementById('evma-strategy-editor')?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
+                  >
+                    EVMA strategy settings
+                  </button>
+                </div>
+
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', flex: 1, overflowY: 'auto', padding: '12px 0' }}>
                   <div className="form-group">
                     <label className="form-label">Backend Endpoint URL</label>
@@ -1855,7 +1874,7 @@ export default function App() {
                     The endpoint and password are saved in localStorage. Accounts and Cloudflare Worker URL are loaded from the authenticated backend.
                   </div>
 
-                  <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: '16px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                  <div id="account-config-editor" style={{ scrollMarginTop: '12px', borderTop: '1px solid var(--border-color)', paddingTop: '16px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
                     <div>
                       <div className="form-label" style={{ marginBottom: '6px' }}>Account configuration</div>
                       <div style={{ fontSize: '12px', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
@@ -1904,7 +1923,7 @@ export default function App() {
                     )}
                   </div>
 
-                  <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: '16px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                  <div id="evma-strategy-editor" style={{ scrollMarginTop: '12px', borderTop: '1px solid var(--border-color)', paddingTop: '16px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
                     <div>
                       <div className="form-label" style={{ marginBottom: '6px' }}>EVMA strategy settings</div>
                       <div style={{ fontSize: '12px', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
