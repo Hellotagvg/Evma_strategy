@@ -12,14 +12,14 @@ from typing import List, Dict, Any, Optional
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Query, Body, Request
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from backend.core.logger import log, log_sync, init_log_db, get_logs, cleanup_logs
 from backend.core.journal import init_journal_db, query_trades, get_trade, DEFAULT_DISPLAYABLE_FIELDS, cleanup_journal
 from backend.core.session import SessionManager
 from backend.core.data_feed import DataFeedManager
-from backend.core.execution import ExecutionEngine, Intent
-from backend.core.strategy import load_strategy_config, get_latest_levels
+from backend.core.execution import ExecutionEngine, Intent, ManagedOrderCancelError
+from backend.core.strategy import StrategyConfig, load_strategy_config, get_latest_levels
 from backend.core.risk import RiskEngine
 from backend.core import exchange_ops
 from backend.core import accounts_config
@@ -361,11 +361,11 @@ class IntentCancelPayload(BaseModel):
 
 class StrategyConfigUpdate(BaseModel):
     coin: str
-    evma_length: int
-    atr_length: int
-    baseline_volatility: float
-    min_stop_pct: float
-    max_stop_pct: float
+    evma_length: int = Field(ge=1)
+    atr_length: int = Field(ge=1)
+    baseline_volatility: float = Field(gt=0)
+    min_stop_pct: float = Field(ge=0)
+    max_stop_pct: float = Field(ge=0)
 
 class DashboardConfigUpdate(BaseModel):
     cloudflare_worker_url: str = ""
@@ -701,10 +701,13 @@ async def post_cancel_intent(payload: IntentCancelPayload):
     """
     Cancels an active drag limiting order if it hasn't been filled or partially filled.
     """
-    success = await execution_engine.cancel_managed_order(payload.order_id)
+    try:
+        success = await execution_engine.cancel_managed_order(payload.order_id)
+    except ManagedOrderCancelError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
     if not success:
         raise HTTPException(
-            status_code=400,
+            status_code=409,
             detail="Failed to cancel dragging order. It may have been filled, partially filled, or not found."
         )
     return {"status": "success", "message": f"Drag limiting order {payload.order_id} cancelled."}
@@ -882,6 +885,11 @@ def get_strategy_settings(coin: str):
 def update_strategy_settings(update: StrategyConfigUpdate):
     """Updates strategy settings for a coin and persists them to its strategy config JSON."""
     coin_lower = update.coin.strip().lower()
+    if coin_lower not in {"btc", "eth", "sol"}:
+        raise HTTPException(status_code=400, detail="Coin must be BTC, ETH, or SOL")
+    if update.min_stop_pct > update.max_stop_pct:
+        raise HTTPException(status_code=422, detail="Minimum stop distance cannot exceed maximum stop distance")
+
     config_path = os.path.join(CONFIG_DIR, f"strategy_{coin_lower}.json")
     
     if not os.path.exists(config_path):
@@ -896,6 +904,10 @@ def update_strategy_settings(update: StrategyConfigUpdate):
     cfg["baseline_volatility"] = update.baseline_volatility
     cfg["min_stop_pct"] = update.min_stop_pct
     cfg["max_stop_pct"] = update.max_stop_pct
+
+    # Validate the complete configuration before persisting changes while
+    # retaining any future or exchange-specific fields in the JSON file.
+    StrategyConfig.model_validate(cfg)
     
     with open(config_path, "w", encoding="utf-8") as f:
         json.dump(cfg, f, indent=4)

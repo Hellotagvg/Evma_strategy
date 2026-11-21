@@ -1,6 +1,6 @@
 # HTTP & WebSocket API
 
-Base URL: `http://localhost:8000` (development) or your Oracle host in production.
+Base URL: `http://localhost:8000` (development) or `https://evmasystem.duckdns.org` in production.
 
 OpenAPI title: **Antigravity Trading System** v1.0.0 — interactive docs at `/docs` when the server is running.
 
@@ -242,6 +242,8 @@ Cancel a managed dragging order by engine `order_id`.
 
 **Response 200:** `{ "status": "success", "message": "..." }`
 
+**Errors:** `409` if the managed order is missing, no longer dragging, or has any fill; `502` if the exchange does not confirm cancellation. On exchange failure, the backend keeps the managed order active so it can be checked or retried.
+
 ---
 
 ## Journal & logs
@@ -289,7 +291,7 @@ Pre-flight for account config changes (kinetic-ops blocks when `active_managed_o
 
 **Body:** `coin`, `evma_length`, `atr_length`, `baseline_volatility`, `min_stop_pct`, `max_stop_pct`
 
-Preserves `symbol`, `tp_rr_options`, etc.
+Preserves `symbol`, `timeframe`, `evma_source`, `tp_rr_options`, etc. Lengths must be positive integers; baseline volatility must be positive; minimum stop distance cannot exceed maximum. Percentage fields are fractions in the API (`0.005` means `0.5%`).
 
 ---
 

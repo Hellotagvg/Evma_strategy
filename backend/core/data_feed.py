@@ -28,6 +28,7 @@ class DataFeedManager:
         self.running = False
         self.feed_mode = "ws"
         self.ws = None
+        self.heartbeat_task = None
         self.session = None
         self.ws_connected = False
         self.rest_fallback_started = False
@@ -225,6 +226,28 @@ class DataFeedManager:
         finally:
             self.rest_fallback_started = False
 
+    async def _bybit_heartbeat(self, ws):
+        """Send Bybit's application-level ping to keep the public stream alive."""
+        try:
+            while self.running and self.ws is ws:
+                await asyncio.sleep(20)
+                await ws.send(json.dumps({"op": "ping"}))
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            await log("data_feed", f"Bybit heartbeat failed: {e}", level="WARNING")
+            try:
+                await ws.close()
+            except Exception:
+                pass
+
+    async def _stop_heartbeat(self):
+        task = self.heartbeat_task
+        self.heartbeat_task = None
+        if task:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
     async def handle_websocket_messages(self):
         """Connects and listens to Bybit public websocket kline channels."""
         backoff = 1
@@ -235,6 +258,7 @@ class DataFeedManager:
                 await log("data_feed", f"Connecting to Bybit WS: {BYBIT_WS_URL}")
                 async with websockets.connect(BYBIT_WS_URL) as ws:
                     self.ws = ws
+                    self.feed_mode = "ws"
                     self.ws_connected = True
                     backoff = 1  # Reset backoff on successful connection
                     
@@ -246,6 +270,7 @@ class DataFeedManager:
                     }
                     await ws.send(json.dumps(sub_msg))
                     await log("data_feed", f"Subscribed to WS channels: {sub_args}")
+                    self.heartbeat_task = asyncio.create_task(self._bybit_heartbeat(ws))
                     
                     while self.running:
                         msg_str = await ws.recv()
@@ -305,18 +330,32 @@ class DataFeedManager:
                                         except Exception as cb_err:
                                             await log("data_feed", f"Callback error for {coin}: {cb_err}", level="ERROR")
                                             
-            except websockets.exceptions.ConnectionClosed:
+            except websockets.exceptions.ConnectionClosed as e:
+                await self._stop_heartbeat()
                 self.ws_connected = False
-                await log("data_feed", "Websocket connection lost.", level="WARNING")
+                await log(
+                    "data_feed",
+                    f"Websocket connection lost (code={e.code}, reason={e.reason}).",
+                    level="WARNING",
+                )
                 if self.running and not self.rest_fallback_started:
                     asyncio.create_task(self._rest_fallback_loop())
-                    break
+                if self.running:
+                    await log("data_feed", f"Reconnecting in {backoff}s...")
+                    await asyncio.sleep(backoff)
+                    backoff = min(60, backoff * 2)
+                    continue
             except Exception as e:
+                await self._stop_heartbeat()
                 self.ws_connected = False
                 await log("data_feed", f"WebSocket error: {e}", level="ERROR")
                 if self.running and not self.rest_fallback_started:
                     asyncio.create_task(self._rest_fallback_loop())
-                    break
+                if self.running:
+                    await log("data_feed", f"Reconnecting in {backoff}s...")
+                    await asyncio.sleep(backoff)
+                    backoff = min(60, backoff * 2)
+                    continue
                 
             if self.running and self.feed_mode == "ws":
                 await log("data_feed", f"Reconnecting in {backoff}s...")
@@ -334,6 +373,7 @@ class DataFeedManager:
     async def stop(self):
         """Stops the data feed manager."""
         self.running = False
+        await self._stop_heartbeat()
         if self.ws:
             await self.ws.close()
         self.ws_connected = False

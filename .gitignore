@@ -16,6 +16,9 @@ dist
 dist-ssr
 *.local
 backend/data/
+backend/config/accounts.json
+kinetic-ops/config.json
+kinetic-ops/.env
 
 # Editor directories and files
 .vscode/*

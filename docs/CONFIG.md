@@ -10,7 +10,7 @@ All persistent backend config lives under `backend/config/`. Runtime data (SQLit
 |----------|---------|--------|
 | `KINETIC_BACKEND_PASSWORD` | `yellow` | Required on all `/api/*` routes (`X-Kinetic-Password` or `?password=`) and `/ws` (`?password=`) |
 
-Set on Oracle via systemd `Environment=` or `EnvironmentFile`. Match the password in Kinetic Terminal **Settings** and `kinetic-ops` `.env`.
+Set on the Lightsail host via systemd `Environment=` or the configured `EnvironmentFile`. Match the password in Kinetic Terminal **Settings** and `kinetic-ops` `.env`.
 
 `/healthz` and `/readyz` are unauthenticated.
 
@@ -199,7 +199,7 @@ Per-coin file, e.g. `backend/config/strategy_btc.json`:
 }
 ```
 
-Runtime updates: `GET/POST /api/strategy/config?coin=BTC` (POST updates lengths and stop fields only; preserves symbol and `tp_rr_options`). No Strategy-tab UI for EVMA params yet — use API or edit JSON on server.
+Runtime updates: `GET/POST /api/strategy/config?coin=BTC` (POST updates lengths and stop fields only; preserves symbol and `tp_rr_options`). Use **Settings → EVMA strategy settings** in Kinetic Terminal to edit these values with a form.
 
 ---
 
@@ -207,12 +207,12 @@ Runtime updates: `GET/POST /api/strategy/config?coin=BTC` (POST updates lengths 
 
 | Variable | Used by | Default |
 |----------|---------|---------|
-| `VITE_BACKEND_URL` | `src/exchangeAPI.js` build-time default for backend POST | `http://localhost:8000` |
+| `VITE_BACKEND_URL` | Build-time default backend URL for `src/App.jsx` and `src/exchangeAPI.js` | `http://localhost:8000` |
 
 Set when building for production:
 
 ```bash
-VITE_BACKEND_URL=https://your-oracle-host:8000 npm run build
+VITE_BACKEND_URL=https://evmasystem.duckdns.org npm run build
 ```
 
 **Runtime:** `App.jsx` uses Settings → `localStorage` `kinetic_backend_url` and `kinetic_backend_password` for most backend calls. Align build-time `VITE_BACKEND_URL` with production host for exchange write helpers.

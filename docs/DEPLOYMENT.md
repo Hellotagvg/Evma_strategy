@@ -1,87 +1,35 @@
 # Deployment
 
-Target layout: **Oracle Cloud free tier** VM for the backend, **GitHub Pages** for the static frontend, optional **Cloudflare Worker** for browser CORS, **Kinetic Ops** on the operator workstation.
+Target layout: **Amazon Lightsail** for the FastAPI backend, **GitHub Pages** for the static frontend, optional **Cloudflare Worker** for browser CORS, and **Kinetic Ops** on the operator workstation.
 
 ---
 
-## Oracle Cloud (backend)
+## Amazon Lightsail (backend)
 
-Typical Always Free shape (verify in your tenancy):
+Production host: `evmasystem.duckdns.org` (static IPv4 `13.50.121.203`), Ubuntu 24.04. The current instance is the 2-vCPU, 1-GB Lightsail plan with 1 GB swap configured.
 
-- **3 OCPU** (Ampere) or equivalent
-- **12 GB** RAM
-- **50 GB** boot volume
+- Source repo: `https://github.com/Hellotagvg/Evma_strategy`, branch `main`.
+- Install path: `/opt/trading-dashboard`.
+- Service: `kinetic-backend.service`, one Uvicorn worker, bound to `127.0.0.1:8000`.
+- Nginx terminates HTTPS at `https://evmasystem.duckdns.org` and proxies HTTP/WebSocket traffic to Uvicorn.
+- `/etc/kinetic-backend/backend.env` stores `KINETIC_BACKEND_PASSWORD`; do not commit or print it.
+- Live accounts and SQLite state stay on the host under `backend/config/accounts.json` and `backend/data/`. Preserve both during code updates. `accounts.json` is git-ignored.
+- Ubuntu firewall allows SSH (22), HTTP (80, for certificate renewal), and HTTPS (443). Lightsail networking must allow these ports too.
+- A systemd timer runs Certbot renewal twice a day and reloads Nginx after renewal.
 
-### Server setup (outline)
-
-1. Create an Oracle Linux or Ubuntu instance; open inbound **TCP 8000** (or 443 behind nginx) from your IP or VPN only.
-2. Clone the repo to e.g. `/opt/trading-dashboard`.
-3. Python venv and dependencies:
-
-```bash
-cd /opt/trading-dashboard
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r backend/requirements.txt
-```
-
-4. Place `backend/config/accounts.json` on the server with real keys — **never commit** to git.
-5. Set backend password:
+After updating source files, restart and inspect the service:
 
 ```bash
-export KINETIC_BACKEND_PASSWORD='use-a-long-random-secret'
+sudo systemctl restart kinetic-backend
+sudo systemctl status kinetic-backend --no-pager
+sudo journalctl -u kinetic-backend -n 100 --no-pager
+curl -fsS https://evmasystem.duckdns.org/healthz
+curl -fsS https://evmasystem.duckdns.org/readyz
 ```
 
-6. Optional `backend/config/dashboard.json` with Cloudflare Worker URL.
-7. Ensure `backend/data/` is writable.
+`/healthz` only confirms process liveness. Use the authenticated dashboard and `/readyz` to verify feed and account readiness before relying on the system during a session. The feed sends Bybit's application-level heartbeat every 20 seconds and reconnects with backoff after a disconnect; REST polling is a fallback, not a ready WebSocket feed.
 
-### systemd
-
-Unit file: `deploy/systemd/kinetic-backend.service`
-
-```ini
-ExecStart=/opt/trading-dashboard/.venv/bin/python -m uvicorn backend.main:app --host 0.0.0.0 --port 8000 --workers 1
-```
-
-**Add password** via drop-in (recommended):
-
-```bash
-sudo mkdir -p /etc/systemd/system/kinetic-backend.service.d
-sudo tee /etc/systemd/system/kinetic-backend.service.d/password.conf <<'EOF'
-[Service]
-Environment=KINETIC_BACKEND_PASSWORD=your-production-secret
-EOF
-```
-
-Install:
-
-```bash
-sudo cp deploy/systemd/kinetic-backend.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable kinetic-backend
-sudo systemctl start kinetic-backend
-journalctl -u kinetic-backend -f
-```
-
-**Keep `--workers 1`.** Active orders, session state, and exchange monitor cache are in-process.
-
-Adjust `User`, `WorkingDirectory`, and `ExecStart` paths to match your install.
-
-### Health checks
-
-| Endpoint | Use |
-|----------|-----|
-| `GET /healthz` | Liveness — process up (no auth) |
-| `GET /readyz` | Readiness — startup self-checks, feed running, WS connected, accounts loaded |
-
-Use `/readyz` for monitoring alerts before relying on the bot during sessions.
-
-### Pre-session verification
-
-```bash
-curl -s http://localhost:8000/readyz | jq .
-curl -s -H "X-Kinetic-Password: $KINETIC_BACKEND_PASSWORD" http://localhost:8000/api/execution/status
-```
+Keep `--workers 1`. Active orders, session state, and exchange monitor cache are in-process. The small Lightsail plan is suitable for light use but has limited memory and CPU burst capacity; swap helps with memory spikes but does not add CPU capacity.
 
 ---
 
@@ -92,7 +40,7 @@ curl -s -H "X-Kinetic-Password: $KINETIC_BACKEND_PASSWORD" http://localhost:8000
 
 ```bash
 npm install
-VITE_BACKEND_URL=https://YOUR_ORACLE_HOST:8000 npm run build
+VITE_BACKEND_URL=https://evmasystem.duckdns.org npm run build
 npm run deploy
 ```
 
@@ -107,13 +55,13 @@ npm run deploy
 - [ ] `dashboard.json` on server has CF worker URL if browser CORS blocks exchange reads
 - [ ] CF worker allowlists `api-demo.bybit.com` if using Bybit demo through worker
 - [ ] `accounts.json` on server has keys for accounts you trade
-- [ ] Firewall restricts port 8000 to operator IPs or VPN
+- [ ] Keep port 8000 private; expose HTTPS on port 443 through Nginx
 
 ---
 
 ## TLS reverse proxy (recommended)
 
-Terminate HTTPS on nginx/Caddy and proxy to `127.0.0.1:8000`. Expose `wss` for `/ws` on the same host. Frontend Settings then use `https://your-domain` — WS URL is derived automatically.
+The current Nginx setup terminates HTTPS and proxies HTTP plus WebSocket traffic to `127.0.0.1:8000`. Frontend Settings use `https://evmasystem.duckdns.org`; the WebSocket URL is derived automatically.
 
 ---
 
@@ -121,7 +69,7 @@ Terminate HTTPS on nginx/Caddy and proxy to `127.0.0.1:8000`. Expose `wss` for `
 
 1. Deploy `cloudflare-worker/worker.js` (Wrangler: `cloudflare-worker/wrangler.toml`)
 2. Add `api-demo.bybit.com` to `ALLOWED_HOSTS` if using Bybit demo
-3. Set `ALLOWED_ORIGIN` to `https://<user>.github.io` (not `*` in production)
+3. Set `ALLOWED_ORIGIN` to `https://hellotagvg.github.io` (not `*` in production)
 4. Put worker URL in `backend/config/dashboard.json`:
 
 ```json
@@ -134,7 +82,7 @@ Terminate HTTPS on nginx/Caddy and proxy to `127.0.0.1:8000`. Expose `wss` for `
 
 ## Kinetic Ops (operator machine)
 
-Deploy the CLI on your laptop or ops host — not on Oracle unless you prefer.
+Deploy the CLI on your laptop or ops host.
 
 ```bash
 cd kinetic-ops
@@ -162,12 +110,12 @@ python -m kinetic_ops
 | Artifact | Host |
 |----------|------|
 | `dist/` static assets | GitHub Pages `/Evma_strategy/` |
-| FastAPI + uvicorn | Oracle VM :8000 |
-| SQLite DBs | Oracle `backend/data/` |
-| Bybit market WS (bot feed) | Oracle outbound to `stream.bybit.com` |
-| Exchange monitor (ccxt poll) | Oracle → exchanges every 5s |
+| FastAPI + uvicorn | Lightsail `127.0.0.1:8000` behind Nginx HTTPS |
+| SQLite DBs | Lightsail `/opt/trading-dashboard/backend/data/` |
+| Bybit market WS (bot feed) | Lightsail outbound to `stream.bybit.com` |
+| Exchange monitor (ccxt poll) | Lightsail → exchanges every 5s |
 | Position UI (primary) | Browser ← `/ws` `exchange_monitor` |
-| Kinetic Ops | Operator workstation → Oracle REST |
+| Kinetic Ops | Operator workstation → Lightsail REST |
 
 ---
 

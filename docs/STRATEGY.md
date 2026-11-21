@@ -137,6 +137,6 @@ On each 1m close while `status == dragging`, entry is amended toward the new EVM
 3. Compare last bar: `/ws` indicators vs chart overlay vs `GET /api/strategy/config`
 4. Run a paper/sim account (placeholder keys → `SimulatedExchange`) before live
 
-No Strategy-tab UI exists for EVMA parameter editing — use API, server file edit, or future UI work.
+Use **Settings → EVMA strategy settings** in Kinetic Terminal to edit EVMA parameters through the authenticated backend API.
 
 See [OPERATIONS.md](OPERATIONS.md) for monitoring indicator errors on `/ws`.
