@@ -50,7 +50,7 @@ import {
 
 // No mock data — positions and limits are fetched live from exchanges
 
-const DEFAULT_BACKEND_URL = 'http://localhost:8000';
+const DEFAULT_BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000';
 const DEFAULT_BACKEND_PASSWORD = '';
 const HTTP_TIMEOUT_MS = 8000;
 // Dashboard monitoring cadence (positions/limits/session). Exceptions: WS ping 25s,
@@ -58,16 +58,42 @@ const HTTP_TIMEOUT_MS = 8000;
 const MONITOR_POLL_MS = 5000;
 const POSITIONS_STALE_UI_SEC = 7;
 const MONITOR_STALE_FALLBACK_SEC = 10;
+const IS_HTTPS_PAGE = window.location.protocol === 'https:';
 
 function normalizeBackendUrl(url) {
-  return (url || DEFAULT_BACKEND_URL).trim().replace(/\/$/, '');
+  const trimmed = (url || DEFAULT_BACKEND_URL).trim().replace(/\/$/, '');
+  if (/^https?:\/\//i.test(trimmed)) return trimmed;
+  if (/^wss:\/\//i.test(trimmed)) return IS_HTTPS_PAGE ? `https://${trimmed.slice('wss://'.length)}` : `http://${trimmed.slice('wss://'.length)}`;
+  if (/^ws:\/\//i.test(trimmed)) return IS_HTTPS_PAGE ? `https://${trimmed.slice('ws://'.length)}` : `http://${trimmed.slice('ws://'.length)}`;
+  return IS_HTTPS_PAGE ? `https://${trimmed}` : `http://${trimmed}`;
+}
+
+function isLocalhostLikeUrl(url) {
+  return /^(?:https?:\/\/)?(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])(?::\d+)?(?:\/.*)?$/i.test((url || '').trim());
+}
+
+function isBackendBrowserBlocked(url) {
+  const normalized = normalizeBackendUrl(url);
+  return IS_HTTPS_PAGE && normalized.startsWith('http://');
 }
 
 function backendHttpToWs(url) {
   const normalized = normalizeBackendUrl(url);
   if (normalized.startsWith('https://')) return `wss://${normalized.slice('https://'.length)}`;
   if (normalized.startsWith('http://')) return `ws://${normalized.slice('http://'.length)}`;
-  return normalized;
+  if (normalized.startsWith('wss://') || normalized.startsWith('ws://')) return normalized;
+  return `${IS_HTTPS_PAGE ? 'wss' : 'ws'}://${normalized}`;
+}
+
+function strategyConfigToForm(config) {
+  const toPercentInput = (fraction) => Number((Number(fraction) * 100).toFixed(8)).toString();
+  return {
+    evma_length: String(config.evma_length),
+    atr_length: String(config.atr_length),
+    baseline_volatility_pct: toPercentInput(config.baseline_volatility),
+    min_stop_pct: toPercentInput(config.min_stop_pct),
+    max_stop_pct: toPercentInput(config.max_stop_pct),
+  };
 }
 
 export default function App() {
@@ -81,6 +107,8 @@ export default function App() {
   
   // App States
   const [activeOrders, setActiveOrders] = useState([]);
+  const [cancellingManagedOrderIds, setCancellingManagedOrderIds] = useState([]);
+  const [managedOrderCancelErrors, setManagedOrderCancelErrors] = useState({});
   const [positions, setPositions] = useState([]);
   const [limits, setLimits] = useState([]);
   const [activeCoin, setActiveCoin] = useState('BTC');
@@ -131,6 +159,11 @@ export default function App() {
   const [accountsConfigDraft, setAccountsConfigDraft] = useState('');
   const [accountsConfigStatus, setAccountsConfigStatus] = useState(null);
   const [accountsConfigBusy, setAccountsConfigBusy] = useState(false);
+  const [strategyConfigCoin, setStrategyConfigCoin] = useState('BTC');
+  const [strategyConfigForm, setStrategyConfigForm] = useState(null);
+  const [strategyConfigMeta, setStrategyConfigMeta] = useState(null);
+  const [strategyConfigStatus, setStrategyConfigStatus] = useState(null);
+  const [strategyConfigBusy, setStrategyConfigBusy] = useState(false);
 
   // Custom added states for new integrations
   const [backendConnected, setBackendConnected] = useState(false);
@@ -175,6 +208,7 @@ export default function App() {
   const wsRef = useRef(null);
   const wsReconnectDelayRef = useRef(2000);
   const wsPingTimerRef = useRef(null);
+  const strategyConfigLoadIdRef = useRef(0);
 
   const backendHeaders = useCallback((extra = {}) => ({
     ...extra,
@@ -192,6 +226,9 @@ export default function App() {
   };
 
   const backendFetch = useCallback((path, options = {}, timeoutMs = HTTP_TIMEOUT_MS) => {
+    if (isBackendBrowserBlocked(backendUrl)) {
+      return Promise.reject(new Error('Backend URL is blocked on secure GitHub Pages. Set a public https backend URL in Settings.'));
+    }
     const headers = backendHeaders(options.headers || {});
     return fetchWithTimeout(`${normalizeBackendUrl(backendUrl)}${path}`, { ...options, headers }, timeoutMs);
   }, [backendHeaders, backendUrl]);
@@ -237,9 +274,21 @@ export default function App() {
     let reconnectTimer = null;
     let shouldReconnect = true;
     const connectWS = () => {
+      if (isBackendBrowserBlocked(backendUrl)) {
+        console.warn('Skipping insecure backend WebSocket on secure page. Set a public https backend URL in Settings.');
+        setBackendConnected(false);
+        return;
+      }
       console.log('Connecting to WebSocket...');
       const wsBase = backendHttpToWs(normalizeBackendUrl(backendUrl));
-      const ws = new WebSocket(`${wsBase}/ws?password=${encodeURIComponent(backendPassword)}`);
+      let ws;
+      try {
+        ws = new WebSocket(`${wsBase}/ws?password=${encodeURIComponent(backendPassword)}`);
+      } catch (err) {
+        console.warn('WebSocket initialization failed:', err);
+        setBackendConnected(false);
+        return;
+      }
       wsRef.current = ws;
 
       ws.onopen = () => {
@@ -416,6 +465,93 @@ export default function App() {
     }
   };
 
+  const loadStrategyConfig = useCallback(async (coin = strategyConfigCoin) => {
+    const requestId = ++strategyConfigLoadIdRef.current;
+    setStrategyConfigBusy(true);
+    setStrategyConfigStatus(null);
+    setStrategyConfigForm(null);
+    try {
+      const resp = await backendFetch(`/api/strategy/config?coin=${encodeURIComponent(coin)}`);
+      const body = await resp.json().catch(() => ({}));
+      if (!resp.ok) {
+        throw new Error(body.detail || `Could not load ${coin} strategy settings.`);
+      }
+      if (requestId !== strategyConfigLoadIdRef.current) return;
+      setStrategyConfigForm(strategyConfigToForm(body));
+      setStrategyConfigMeta({
+        timeframe: body.timeframe,
+        evma_source: body.evma_source,
+      });
+    } catch (e) {
+      if (requestId === strategyConfigLoadIdRef.current) {
+        setStrategyConfigStatus({ type: 'error', message: e.message || 'Could not load strategy settings.' });
+      }
+    } finally {
+      if (requestId === strategyConfigLoadIdRef.current) setStrategyConfigBusy(false);
+    }
+  }, [backendFetch, strategyConfigCoin]);
+
+  const saveStrategyConfig = async () => {
+    if (!strategyConfigForm) return;
+    setStrategyConfigStatus(null);
+
+    const evmaLength = Number(strategyConfigForm.evma_length);
+    const atrLength = Number(strategyConfigForm.atr_length);
+    const baselineVolatilityPct = Number(strategyConfigForm.baseline_volatility_pct);
+    const minStopPct = Number(strategyConfigForm.min_stop_pct);
+    const maxStopPct = Number(strategyConfigForm.max_stop_pct);
+    if (!Number.isInteger(evmaLength) || evmaLength < 1) {
+      setStrategyConfigStatus({ type: 'error', message: 'EVMA length must be a whole number of at least 1.' });
+      return;
+    }
+    if (!Number.isInteger(atrLength) || atrLength < 1) {
+      setStrategyConfigStatus({ type: 'error', message: 'ATR length must be a whole number of at least 1.' });
+      return;
+    }
+    if (!Number.isFinite(baselineVolatilityPct) || baselineVolatilityPct <= 0) {
+      setStrategyConfigStatus({ type: 'error', message: 'Baseline volatility must be greater than 0%.' });
+      return;
+    }
+    if (!Number.isFinite(minStopPct) || minStopPct < 0 || !Number.isFinite(maxStopPct) || maxStopPct < 0) {
+      setStrategyConfigStatus({ type: 'error', message: 'Stop distances must be valid percentages of 0% or more.' });
+      return;
+    }
+    if (minStopPct > maxStopPct) {
+      setStrategyConfigStatus({ type: 'error', message: 'Minimum stop distance cannot exceed maximum stop distance.' });
+      return;
+    }
+
+    setStrategyConfigBusy(true);
+    try {
+      const resp = await backendFetch('/api/strategy/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          coin: strategyConfigCoin,
+          evma_length: evmaLength,
+          atr_length: atrLength,
+          baseline_volatility: baselineVolatilityPct / 100,
+          min_stop_pct: minStopPct / 100,
+          max_stop_pct: maxStopPct / 100,
+        }),
+      });
+      const body = await resp.json().catch(() => ({}));
+      if (!resp.ok) {
+        throw new Error(body.detail || 'Failed to save strategy settings.');
+      }
+      setStrategyConfigForm(strategyConfigToForm(body.config));
+      setStrategyConfigMeta({
+        timeframe: body.config.timeframe,
+        evma_source: body.config.evma_source,
+      });
+      setStrategyConfigStatus({ type: 'success', message: `${strategyConfigCoin} strategy settings saved.` });
+    } catch (e) {
+      setStrategyConfigStatus({ type: 'error', message: e.message || 'Failed to save strategy settings.' });
+    } finally {
+      setStrategyConfigBusy(false);
+    }
+  };
+
   const fetchSessionStatus = async () => {
     try {
       const resp = await backendFetch('/api/session');
@@ -456,6 +592,11 @@ export default function App() {
     fetchAccountsFromBackend();
     fetchSessionStatus();
   }, [backendFetch]);
+
+  useEffect(() => {
+    if (activePanel !== 'settings') return;
+    loadStrategyConfig(strategyConfigCoin);
+  }, [activePanel, strategyConfigCoin, loadStrategyConfig]);
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -863,6 +1004,31 @@ export default function App() {
       await refreshMonitoring();
     } catch (e) {
       alert(`Cancel failed: ${e.message}`);
+    }
+  };
+
+  const handleCancelManagedOrder = async (orderId) => {
+    if (!window.confirm('Cancel this unfilled strategy dragging order?')) return;
+    setManagedOrderCancelErrors((prev) => ({ ...prev, [orderId]: null }));
+    setCancellingManagedOrderIds((prev) => [...prev, orderId]);
+    try {
+      const resp = await backendFetch('/api/intent/cancel', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ order_id: orderId }),
+      });
+      const body = await resp.json().catch(() => ({}));
+      if (!resp.ok) {
+        throw new Error(body.detail || `Cancellation failed (${resp.status}).`);
+      }
+      setActiveOrders((prev) => prev.filter((order) => order.order_id !== orderId));
+    } catch (e) {
+      setManagedOrderCancelErrors((prev) => ({
+        ...prev,
+        [orderId]: e.message || 'Cancellation failed. The order remains active.',
+      }));
+    } finally {
+      setCancellingManagedOrderIds((prev) => prev.filter((id) => id !== orderId));
     }
   };
 
@@ -1738,6 +1904,146 @@ export default function App() {
                     )}
                   </div>
 
+                  <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: '16px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                    <div>
+                      <div className="form-label" style={{ marginBottom: '6px' }}>EVMA strategy settings</div>
+                      <div style={{ fontSize: '12px', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+                        Edit the EVMA and dynamic ATR stop parameters for each coin. Percentage values are entered as percentages and saved to the backend as fractions.
+                      </div>
+                    </div>
+
+                    <div className="form-group">
+                      <label className="form-label" htmlFor="strategy-config-coin">Coin</label>
+                      <select
+                        id="strategy-config-coin"
+                        className="form-input"
+                        value={strategyConfigCoin}
+                        onChange={(e) => setStrategyConfigCoin(e.target.value)}
+                      >
+                        <option value="BTC">BTC</option>
+                        <option value="ETH">ETH</option>
+                        <option value="SOL">SOL</option>
+                      </select>
+                    </div>
+
+                    {strategyConfigMeta && (
+                      <div style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>
+                        Source: {strategyConfigMeta.evma_source || '—'} · Timeframe: {strategyConfigMeta.timeframe || '—'}
+                      </div>
+                    )}
+
+                    {strategyConfigBusy && !strategyConfigForm ? (
+                      <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Loading {strategyConfigCoin} settings…</div>
+                    ) : strategyConfigForm && (
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(135px, 1fr))', gap: '12px' }}>
+                        <div className="form-group">
+                          <label className="form-label" htmlFor="strategy-evma-length">EVMA length</label>
+                          <input
+                            id="strategy-evma-length"
+                            className="form-input"
+                            type="number"
+                            min="1"
+                            step="1"
+                            value={strategyConfigForm.evma_length}
+                            onChange={(e) => {
+                              setStrategyConfigForm((prev) => ({ ...prev, evma_length: e.target.value }));
+                              setStrategyConfigStatus(null);
+                            }}
+                          />
+                        </div>
+                        <div className="form-group">
+                          <label className="form-label" htmlFor="strategy-atr-length">ATR length</label>
+                          <input
+                            id="strategy-atr-length"
+                            className="form-input"
+                            type="number"
+                            min="1"
+                            step="1"
+                            value={strategyConfigForm.atr_length}
+                            onChange={(e) => {
+                              setStrategyConfigForm((prev) => ({ ...prev, atr_length: e.target.value }));
+                              setStrategyConfigStatus(null);
+                            }}
+                          />
+                        </div>
+                        <div className="form-group">
+                          <label className="form-label" htmlFor="strategy-baseline-volatility">Baseline volatility (%)</label>
+                          <input
+                            id="strategy-baseline-volatility"
+                            className="form-input"
+                            type="number"
+                            min="0.0001"
+                            step="any"
+                            value={strategyConfigForm.baseline_volatility_pct}
+                            onChange={(e) => {
+                              setStrategyConfigForm((prev) => ({ ...prev, baseline_volatility_pct: e.target.value }));
+                              setStrategyConfigStatus(null);
+                            }}
+                          />
+                        </div>
+                        <div className="form-group">
+                          <label className="form-label" htmlFor="strategy-min-stop">Minimum stop distance (%)</label>
+                          <input
+                            id="strategy-min-stop"
+                            className="form-input"
+                            type="number"
+                            min="0"
+                            step="any"
+                            value={strategyConfigForm.min_stop_pct}
+                            onChange={(e) => {
+                              setStrategyConfigForm((prev) => ({ ...prev, min_stop_pct: e.target.value }));
+                              setStrategyConfigStatus(null);
+                            }}
+                          />
+                        </div>
+                        <div className="form-group">
+                          <label className="form-label" htmlFor="strategy-max-stop">Maximum stop distance (%)</label>
+                          <input
+                            id="strategy-max-stop"
+                            className="form-input"
+                            type="number"
+                            min="0"
+                            step="any"
+                            value={strategyConfigForm.max_stop_pct}
+                            onChange={(e) => {
+                              setStrategyConfigForm((prev) => ({ ...prev, max_stop_pct: e.target.value }));
+                              setStrategyConfigStatus(null);
+                            }}
+                          />
+                        </div>
+                      </div>
+                    )}
+
+                    <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                      <button
+                        className="btn"
+                        style={{ padding: '7px 12px' }}
+                        onClick={() => loadStrategyConfig(strategyConfigCoin)}
+                        disabled={strategyConfigBusy}
+                      >
+                        Reload values
+                      </button>
+                      <button
+                        className="btn btn-cyan"
+                        style={{ padding: '7px 12px' }}
+                        onClick={saveStrategyConfig}
+                        disabled={strategyConfigBusy || !strategyConfigForm}
+                      >
+                        {strategyConfigBusy ? 'Working…' : 'Save EVMA settings'}
+                      </button>
+                    </div>
+
+                    {strategyConfigStatus && (
+                      <div role="status" style={{
+                        fontSize: '12px',
+                        lineHeight: 1.5,
+                        color: strategyConfigStatus.type === 'error' ? '#ff6666' : '#66ff99',
+                      }}>
+                        {strategyConfigStatus.message}
+                      </div>
+                    )}
+                  </div>
+
                   <button className="btn btn-cyan" onClick={() => setActivePanel(null)}>
                      Save &amp; Close
                    </button>
@@ -2470,7 +2776,16 @@ export default function App() {
                       </div>
                     ) : (
                       <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '16px' }}>
-                        {activeOrders.filter(o => o.account_id === selectedStrategyAccount.id).map(o => (
+                        {activeOrders.filter(o => o.account_id === selectedStrategyAccount.id).map(o => {
+                          const filledQty = Number(o.filled_qty || 0);
+                          const entryQty = Number(o.entry_qty || 0);
+                          const isPartiallyFilled = Boolean(o.partial_fill_detected)
+                            || (filledQty > 0 && entryQty > 0 && filledQty < entryQty);
+                          const canCancelManagedOrder = o.status === 'dragging'
+                            && filledQty <= 0
+                            && !o.partial_fill_detected;
+                          const isCancellingManagedOrder = cancellingManagedOrderIds.includes(o.order_id);
+                          return (
                           <div key={o.order_id} style={{
                             padding: '16px',
                             borderRadius: '8px',
@@ -2495,7 +2810,7 @@ export default function App() {
                                 </span>
                               </div>
                               <div style={{ fontSize: '11px', fontWeight: '600', color: 'var(--text-secondary)', textTransform: 'uppercase', background: 'rgba(255,255,255,0.05)', padding: '4px 8px', borderRadius: '4px' }}>
-                                {o.status.replace('_', ' ')}
+                                {isPartiallyFilled ? 'Partially filled' : o.status.replace('_', ' ')}
                               </div>
                             </div>
                             
@@ -2519,13 +2834,30 @@ export default function App() {
                             </div>
 
                             {o.status === 'filled' && (
-                              <div style={{ marginTop: '4px', fontSize: '11px', color: 'var(--text-secondary)', display: 'flex', justifyContent: 'space-between' }}>
-                                <span>Filled At: ${Number(o.fill_price).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
-                                <span>{new Date(o.fill_time).toLocaleTimeString()}</span>
+                              <div style={{ marginTop: '4px', fontSize: '11px', color: 'var(--text-secondary)', display: 'flex', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap' }}>
+                                <span>{isPartiallyFilled ? `Filled quantity: ${filledQty.toLocaleString()}${entryQty > 0 ? ` / ${entryQty.toLocaleString()}` : ''}` : `Filled At: $${Number(o.fill_price).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}</span>
+                                <span>{o.fill_time ? new Date(o.fill_time).toLocaleTimeString() : ''}</span>
+                              </div>
+                            )}
+                            {canCancelManagedOrder && (
+                              <button
+                                type="button"
+                                className="btn"
+                                style={{ alignSelf: 'flex-end', padding: '7px 12px', color: 'var(--accent-red)', borderColor: 'var(--accent-red)' }}
+                                disabled={isCancellingManagedOrder}
+                                onClick={() => handleCancelManagedOrder(o.order_id)}
+                              >
+                                {isCancellingManagedOrder ? 'Cancelling…' : 'Cancel strategy order'}
+                              </button>
+                            )}
+                            {managedOrderCancelErrors[o.order_id] && (
+                              <div role="alert" style={{ fontSize: '12px', color: 'var(--accent-red)' }}>
+                                {managedOrderCancelErrors[o.order_id]}
                               </div>
                             )}
                           </div>
-                        ))}
+                          );
+                        })}
                       </div>
                     )}
                   </div>

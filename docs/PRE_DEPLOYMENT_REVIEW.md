@@ -323,3 +323,6 @@ Active orders, session traded map, exchange monitor cache are **in-process**. Do
 ---
 
 *Full operator workflow: [OPERATOR.md](OPERATOR.md) · Config reference: [CONFIG.md](CONFIG.md) · Deploy steps: [DEPLOYMENT.md](DEPLOYMENT.md)*
+# Historical review notice
+
+This review was written before the deployment moved to Amazon Lightsail and before the production site was confirmed at `https://hellotagvg.github.io/Evma_strategy/`. For current host details and deploy steps, use [DEPLOYMENT.md](DEPLOYMENT.md). Treat the original Oracle-specific findings below as historical.

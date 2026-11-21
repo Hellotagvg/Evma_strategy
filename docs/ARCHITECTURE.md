@@ -20,7 +20,7 @@ flowchart TB
     KOPS[Kinetic Ops CLI]
   end
 
-  subgraph Oracle["Oracle VM — FastAPI :8000"]
+  subgraph Lightsail["Lightsail VM — FastAPI :8000 behind HTTPS"]
     API[backend/main.py]
     SESS[SessionManager]
     FEED[DataFeedManager]

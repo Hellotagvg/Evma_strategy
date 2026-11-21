@@ -1,6 +1,6 @@
 # Operations runbook
 
-Day-to-day checks for **Antigravity Trading System** on Oracle and **Kinetic Terminal** on GitHub Pages.
+Day-to-day checks for **Antigravity Trading System** on Lightsail and **Kinetic Terminal** on GitHub Pages.
 
 ---
 

@@ -9,7 +9,7 @@
 
 Semi-automated crypto **futures** workstation for **BTC, ETH, and SOL** on Bybit (demo/live) and Hyperliquid. The human approves trade **intents**; the backend drags limit entries on the EVMA line, manages fills, and journals outcomes. Strategy levels are backtested (EVMA + dual dynamic ATR stops). This is **not** fully autonomous trading.
 
-**Production backend:** Oracle Cloud free tier (typical shape: 3 vCPU, 12 GB RAM, 50 GB disk). Frontend is static on GitHub Pages under `/tcl/`.
+**Production backend:** Amazon Lightsail, Ubuntu 24.04, at `evmasystem.duckdns.org`. Frontend is static on GitHub Pages at `/Evma_strategy/`.
 
 ---
 
@@ -31,7 +31,7 @@ Trading dashboard/
 ├── AGENTS.md                 ← you are here
 ├── README.md
 ├── package.json              # npm: dev, build, deploy (gh-pages)
-├── vite.config.js            # base: /tcl/
+├── vite.config.js            # base: /Evma_strategy/
 ├── kinetic-ops/              # local ops CLI (log sync, account push)
 │   ├── kops.py               # python kops.py
 │   ├── kinetic_ops/          # python -m kinetic_ops
@@ -131,7 +131,7 @@ Each row in `accounts.json` is one challenge or one wallet (own risk, R:R, `enab
 ## Secrets policy
 
 - **Never** commit real API keys, private keys, or wallet secrets.
-- `accounts.json` is required at backend startup but is **not** in root `.gitignore` today — treat as local-only and use placeholders (`YOUR_API_KEY_HERE`) in examples and repos. **Rotate** if keys were ever committed.
+- `accounts.json` is required at backend startup and ignored by the root `.gitignore`; use `accounts.example.json` with placeholders in the public repo. **Rotate** if real keys were ever committed.
 - All `/api/*` routes require `X-Kinetic-Password` (or `?password=`). WebSocket `/ws` requires `?password=`.
 - `GET /api/accounts` returns credential shapes to authenticated callers — protect the backend network.
 - Browser **reads** may use credentials from `/api/accounts` with HMAC signing in the browser (Bybit) or HL info API; optional CF worker for CORS.
@@ -194,6 +194,7 @@ Requires authenticated backend (password in Settings).
 |------|--------|
 | Change session hours / intent window | `backend/core/session.py` |
 | Adjust EVMA/ATR/stop params per coin | `backend/config/strategy_*.json`, `POST /api/strategy/config` |
+| Account/API-key or EVMA frontend configuration flows | [ACCOUNT_AND_EVMA_CONFIGURATION.md](ACCOUNT_AND_EVMA_CONFIGURATION.md) |
 | Add account or risk mode | `backend/config/accounts.json`, `backend/core/accounts_config.py`, `backend/core/risk.py` |
 | Change intent sizing / dragging | `backend/core/execution.py`, `backend/core/risk.py` |
 | Exchange monitor / WS snapshot | `backend/core/exchange_monitor.py`, `main.py` ws_broadcaster_loop |
@@ -204,7 +205,7 @@ Requires authenticated backend (password in Settings).
 | Browser read signing | `src/exchangeAPI.js` |
 | CORS proxy | `cloudflare-worker/worker.js` |
 | Deploy backend | `deploy/systemd/kinetic-backend.service`, [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) |
-| Deploy frontend | `vite.config.js` (`base: '/tcl/'`), `npm run deploy` |
+| Deploy frontend | `vite.config.js` (`base: '/Evma_strategy/'`), `npm run deploy` |
 | Ops: sync logs / update accounts | `kinetic-ops/` (`python -m kinetic_ops`) |
 
 ---
@@ -212,6 +213,7 @@ Requires authenticated backend (password in Settings).
 ## Further reading
 
 - [docs/PRE_DEPLOYMENT_REVIEW.md](docs/PRE_DEPLOYMENT_REVIEW.md) — last review before deployment (2026-06-23)
+- [ACCOUNT_AND_EVMA_CONFIGURATION.md](ACCOUNT_AND_EVMA_CONFIGURATION.md) - frontend account and EVMA configuration flows
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 - [docs/CONFIG.md](docs/CONFIG.md)
 - [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)
@@ -228,8 +230,8 @@ Requires authenticated backend (password in Settings).
 |------|--------|
 | Coins | BTC, ETH, SOL |
 | Exchanges | Bybit (demo/live), Hyperliquid |
-| Backend hosting | Oracle free tier (documented target) |
-| Frontend hosting | GitHub Pages `/tcl/` |
+| Backend hosting | Amazon Lightsail Ubuntu 24.04 (`evmasystem.duckdns.org`) |
+| Frontend hosting | GitHub Pages `/Evma_strategy/` |
 | Backend auth | Password on `/api/*` and `/ws` |
 | Position monitoring | WS `exchange_monitor` + browser/REST fallbacks |
 | Mock mode | Removed (backend-only accounts) |

@@ -47,7 +47,8 @@ See [kinetic-ops/README.md](kinetic-ops/README.md).
 | [AGENTS.md](AGENTS.md) | AI assistants — repo map, data flows, do-not-break rules |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Components, session & execution flows |
 | [docs/CONFIG.md](docs/CONFIG.md) | accounts.json, strategy JSON, env vars, auth |
-| [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | Oracle systemd, GitHub Pages `/Evma_strategy/`, kinetic-ops |
+| [ACCOUNT_AND_EVMA_CONFIGURATION.md](ACCOUNT_AND_EVMA_CONFIGURATION.md) | Frontend account and EVMA configuration flows |
+| [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | Lightsail systemd, GitHub Pages `/Evma_strategy/`, kinetic-ops |
 | [docs/API.md](docs/API.md) | REST & WebSocket reference |
 | [docs/STRATEGY.md](docs/STRATEGY.md) | EVMA dual ATR stops, JS/Python parity |
 | [docs/OPERATIONS.md](docs/OPERATIONS.md) | readyz, stale feed, journal, rotation |

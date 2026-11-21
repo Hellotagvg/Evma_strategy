@@ -19,6 +19,10 @@ from backend.core.exchange_factory import ccxt_symbol
 from backend.core.risk import RiskEngine, OrderParams
 from backend.core.journal import open_trade, close_trade, update_trade
 
+
+class ManagedOrderCancelError(Exception):
+    """Raised when an exchange rejects or fails a managed order cancellation."""
+
 @dataclass
 class Intent:
     account_id: str
@@ -1211,13 +1215,23 @@ class ExecutionEngine:
         
         await log("execution", f"User requested cancellation of dragging order {o.order_id} (Exchange ID: {o.exchange_order_id}).")
         
-        # 1. Cancel on exchange
+        # Cancel at the exchange before changing local state. A failed or
+        # ambiguous exchange response must leave the order active for retry or
+        # reconciliation rather than reporting a false cancellation.
+        if not o.is_simulated and (not exchange or not o.exchange_order_id):
+            raise ManagedOrderCancelError(
+                "The exchange order could not be located for cancellation. The managed order remains active."
+            )
+
         if exchange and o.exchange_order_id:
             try:
                 await self._exchange_call(exchange.cancel_order(o.exchange_order_id, symbol))
                 await log("execution", f"Cancelled entry order {o.exchange_order_id} on exchange for managed order {o.order_id}.")
             except Exception as cancel_err:
                 await log("execution", f"Failed cancelling order {o.order_id} (Exchange ID: {o.exchange_order_id}) on exchange: {cancel_err}", level="WARNING")
+                raise ManagedOrderCancelError(
+                    "The exchange did not confirm cancellation. The managed order remains active; check the exchange before retrying."
+                ) from cancel_err
                 
         # 2. Update status and journal
         o.status = "cancelled"
